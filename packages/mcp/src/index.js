@@ -70,6 +70,29 @@ mcpServer.registerTool(
 						)
 						.join('\n')
 				: ''
+			// KNOVA: per-step token usage rides in `history` (upstream discarded it in hub-bridge;
+			// we kept it). Summing it is the ONLY way to answer "does the cheap model actually burn
+			// the same tokens?" — which decides whether a 10x cheaper price is a 10x cheaper bill.
+			// Without this you can only compare step COUNT, which hides the per-call snapshot size.
+			const u = (result.history || []).reduce(
+				(a, h) => {
+					const x = h && h.usage
+					if (!x) return a
+					return {
+						prompt: a.prompt + (x.promptTokens || 0),
+						completion: a.completion + (x.completionTokens || 0),
+						total: a.total + (x.totalTokens || 0),
+						cached: a.cached + (x.cachedTokens || 0),
+						calls: a.calls + 1,
+					}
+				},
+				{ prompt: 0, completion: 0, total: 0, cached: 0, calls: 0 }
+			)
+			const tokens = u.total
+				? `\n\n--- Tokens --- ${u.total} total · ${u.prompt} in / ${u.completion} out` +
+					(u.cached ? ` · ${u.cached} cached` : '') +
+					` · ${u.calls} LLM calls`
+				: ''
 			return {
 				content: [
 					{
@@ -77,7 +100,15 @@ mcpServer.registerTool(
 						text:
 							(result.success
 								? `Task completed.\n\n${result.data}`
-								: `Task failed.\n\n${result.data}`) + trace,
+								: `Task failed.\n\n${result.data}`) +
+							// KNOVA: name the loop breaker when IT stopped the task. Without this the
+							// caller sees a bare "Task aborted" and can't tell a stuck agent from a
+							// user cancel — and would likely just retry the same doomed approach.
+							(hub.loopBroken
+								? `\n\n⚠️ STOPPED BY THE LOOP BREAKER: ${hub.loopBroken}. The page did not respond to this action — try a DIFFERENT approach (a direct URL, a different element), not the same one again.`
+								: '') +
+							trace +
+							tokens,
 					},
 				],
 			}

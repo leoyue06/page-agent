@@ -18,6 +18,9 @@ const launcherTemplate = readFileSync(
  * - HTTP serves the launcher page (triggers extension to open hub)
  * - WS carries execute/stop commands and result/error responses
  */
+const LOOP_LIMIT = 6 // KNOVA: 6 identical calls in a row = stuck. High enough that 2-3 legit
+// repeats never trip it; low enough that the §18.5 case costs ~30s instead of 213s.
+
 export class HubBridge {
 	/** @type {number} */
 	port
@@ -39,6 +42,19 @@ export class HubBridge {
 	 *  30s and getting an undiagnosable "fail". Cleared when a new task starts. */
 	/** @type {unknown[]} */
 	#activities = []
+
+	/** KNOVA loop breaker. The agent has NO loop detection of its own: a Gmail compose test
+	 *  clicked the SAME "Maximize" button 20 times in a row and burned 213s before giving up
+	 *  (page-agent-integration-log.html §18.5). stop_task aborts in ~0.1s — measured — so the
+	 *  missing piece was never the brake, only something willing to pull it. Living HERE (not in
+	 *  the MCP client) means it also protects `claude -p`, which is blocked on execute_task and
+	 *  structurally cannot stop anything itself. Signature = tool + its input, so legitimate
+	 *  repetition (three scrolls of different distances) never trips it. */
+	#loopSig = null
+	#loopCount = 0
+	/** @type {string | null} set when WE pulled the brake, so "aborted" stays distinguishable
+	 *  from a user-requested stop — otherwise a broken loop reads as a mysterious cancel. */
+	#loopBroken = null
 
 	/** @param {number} port */
 	constructor(port) {
@@ -87,6 +103,11 @@ export class HubBridge {
 		return this.#activities
 	}
 
+	/** KNOVA: non-null when the loop breaker stopped this task (vs a user-requested stop). */
+	get loopBroken() {
+		return this.#loopBroken
+	}
+
 	/**
 	 * @param {string} task
 	 * @param {Record<string, unknown>} [config]
@@ -97,6 +118,9 @@ export class HubBridge {
 		if (this.#pendingTask) throw new Error('Agent is already running a task.')
 
 		this.#activities = [] // KNOVA: fresh trace per task
+		this.#loopSig = null // KNOVA: and a fresh loop-breaker window
+		this.#loopCount = 0
+		this.#loopBroken = null
 		return new Promise((resolve, reject) => {
 			this.#pendingTask = { resolve, reject }
 			this.#hub.send(JSON.stringify({ type: 'execute', task, config }))
@@ -136,6 +160,21 @@ export class HubBridge {
 				console.error(
 					`[page-agent-mcp] step: ${a.type}${a.tool ? ' ' + a.tool : ''}${a.attempt ? ` (${a.attempt}/${a.maxAttempts})` : ''}`
 				)
+				if (a.type === 'executing') {
+					const sig = `${a.tool}|${JSON.stringify(a.input)}`
+					if (process.env.PA_LOOP_DEBUG) console.error(`[loop] ${this.#loopCount} ${sig}`)
+					if (sig === this.#loopSig) {
+						this.#loopCount++
+						if (this.#loopCount >= LOOP_LIMIT && !this.#loopBroken) {
+							this.#loopBroken = `${a.tool} repeated ${this.#loopCount}x with identical input`
+							console.error(`[page-agent-mcp] LOOP BREAKER: ${this.#loopBroken} — stopping`)
+							this.stopTask()
+						}
+					} else {
+						this.#loopSig = sig
+						this.#loopCount = 1
+					}
+				}
 				return
 			}
 			if (msg.type === 'result') {
