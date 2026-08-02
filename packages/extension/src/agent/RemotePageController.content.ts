@@ -35,32 +35,47 @@ export function initPageController() {
 	}
 
 	intervalID = window.setInterval(async () => {
-		const agentHeartbeat = (await chrome.storage.local.get('agentHeartbeat')).agentHeartbeat
-		const now = Date.now()
-		const agentInTouch = typeof agentHeartbeat === 'number' && now - agentHeartbeat < 2_000
-
-		const isAgentRunning = (await chrome.storage.local.get('isAgentRunning')).isAgentRunning
-		const currentTabId = (await chrome.storage.local.get('currentTabId')).currentTabId
-
-		const shouldShowMask = isAgentRunning && agentInTouch && currentTabId === (await myTabIdPromise)
-
-		if (shouldShowMask) {
-			const pc = getPC()
-			pc.initMask()
-			await pc.showMask()
-		} else {
-			// await getPC().hideMask()
-			if (pageController) {
-				pageController.hideMask()
-				pageController.cleanUpHighlights()
-			}
+		// KNOVA: stop the orphaned poller after an extension reload/update. Chrome leaves the OLD
+		// content script running in every already-open tab, but its chrome.* APIs are dead — so
+		// this 500ms loop threw "Extension context invalidated" forever, in every stale tab, and
+		// Clear-all in chrome://extensions could not help because the throwing kept happening.
+		// `chrome.runtime.id` goes undefined exactly when the context is invalidated.
+		if (!chrome.runtime?.id) {
+			window.clearInterval(intervalID ?? undefined)
+			return
 		}
+		try {
+			const agentHeartbeat = (await chrome.storage.local.get('agentHeartbeat')).agentHeartbeat
+			const now = Date.now()
+			const agentInTouch = typeof agentHeartbeat === 'number' && now - agentHeartbeat < 2_000
 
-		if (!isAgentRunning && agentInTouch) {
-			if (pageController) {
-				pageController.dispose()
-				pageController = null
+			const isAgentRunning = (await chrome.storage.local.get('isAgentRunning')).isAgentRunning
+			const currentTabId = (await chrome.storage.local.get('currentTabId')).currentTabId
+
+			const shouldShowMask =
+				isAgentRunning && agentInTouch && currentTabId === (await myTabIdPromise)
+
+			if (shouldShowMask) {
+				const pc = getPC()
+				pc.initMask()
+				await pc.showMask()
+			} else {
+				// await getPC().hideMask()
+				if (pageController) {
+					pageController.hideMask()
+					pageController.cleanUpHighlights()
+				}
 			}
+
+			if (!isAgentRunning && agentInTouch) {
+				if (pageController) {
+					pageController.dispose()
+					pageController = null
+				}
+			}
+		} catch {
+			// context torn down mid-tick — stop quietly rather than throw every 500ms
+			window.clearInterval(intervalID ?? undefined)
 		}
 	}, 500)
 
