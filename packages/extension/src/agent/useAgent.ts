@@ -74,16 +74,21 @@ export function useAgent(): UseAgentResult {
 		const agent = new MultiPageAgent({
 			...agentConfig,
 			instructions: systemInstruction ? { system: systemInstruction } : undefined,
-			// KNOVA: upstream never set onAskUser, and PageAgentCore DELETES the ask_user tool when
-			// the callback is absent — so ask_user has been dead in this extension all along. Our
-			// caller is headless (the KNOVA manager over the hub WS), so a mid-task modal is useless;
-			// instead steer the model to abort WITH the question in the result. The manager answers
-			// from its private notes and re-delegates with the answer embedded (turn-level relay —
-			// execute_task is a blocking call, nothing can be injected mid-flight).
-			onAskUser: async (question) =>
-				`SYSTEM NOTICE: the user cannot be reached mid-task. Call the done tool NOW with ` +
-				`success=false and text exactly "ASK_USER: ${question}". Do nothing else first.`,
 		})
+
+		// KNOVA: onAskUser is a PROPERTY assigned AFTER construction — PageAgentCore's constructor
+		// never reads it off the config (upstream's Panel.ts does exactly this too). Passing it in
+		// the config object silently did nothing; tsc said so and the build still succeeded, which
+		// is why the first attempt shipped dead. PageAgentCore deletes the ask_user tool entirely
+		// when this is unset, so without it the model never sees the tool at all.
+		// Our caller is headless (the KNOVA manager over the hub WS), so a mid-task modal is
+		// useless: execute_task is a blocking call and nothing can be injected mid-flight. Instead
+		// steer the model to end the run CARRYING the question; the manager answers it from its
+		// private notes and re-delegates.
+		agent.onAskUser = async (question: string) =>
+			`SYSTEM NOTICE: the user cannot be reached mid-task. Call the done tool NOW with ` +
+			`success=false and text exactly "ASK_USER: ${question}". Do nothing else first.`
+
 		agentRef.current = agent
 
 		const handleStatusChange = (e: Event) => {
