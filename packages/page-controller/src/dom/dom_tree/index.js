@@ -1626,6 +1626,28 @@ export default (
 			) {
 				nodeData.attributes.checked = node.checked ? 'true' : 'false' // Store as string for consistency
 			}
+
+			/**
+			 * KNOVA @workaround input/textarea/select .value — same class of bug as input.checked
+			 * above, which upstream already patched and then never generalised.
+			 *
+			 * getAttribute('value') returns the HTML ATTRIBUTE, which does not change when text is
+			 * typed — the live text lives on the PROPERTY. And getAttributeNames() omits `value`
+			 * entirely when the markup never declared one, so a filled field showed up in the
+			 * snapshot with no value at all. Net effect: after input_text the agent could re-read
+			 * the page (it does, every step) and STILL not see what it had just typed, so filling a
+			 * form was unverifiable by construction. Mirrors the checked workaround.
+			 */
+			const tag = node.tagName.toLowerCase()
+			if (tag === 'textarea' || tag === 'select') {
+				nodeData.attributes.value = node.value ?? ''
+			} else if (tag === 'input' && node.type !== 'checkbox' && node.type !== 'radio') {
+				// password stays masked — never put a credential in the snapshot the LLM receives
+				nodeData.attributes.value =
+					node.type === 'password' ? (node.value ? '••••••' : '') : (node.value ?? '')
+			} else if (node.isContentEditable) {
+				nodeData.attributes.value = (node.textContent ?? '').slice(0, 200)
+			}
 		}
 
 		let nodeWasHighlighted = false
