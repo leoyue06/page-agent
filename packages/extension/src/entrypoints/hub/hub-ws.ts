@@ -235,6 +235,7 @@ export function useHubWs(
 	const hubWsRef = useRef<HubWs | null>(null)
 
 	const latestRef = useRef({ execute, stop, configure, config })
+	const lastConfigRef = useRef<string>('') // KNOVA: dedupe configure calls (see onExecute)
 	useEffect(() => {
 		latestRef.current = { execute, stop, configure, config }
 	})
@@ -247,8 +248,15 @@ export function useHubWs(
 			{
 				onExecute: async (task, incomingConfig) => {
 					const { execute, configure, config } = latestRef.current
-					if (incomingConfig) {
+					// KNOVA fix — upstream race: configure() → setConfig → the [config] effect
+					// recreates the agent and its cleanup DISPOSES the old one, killing the task
+					// execute() just started ("Task aborted" at ~0.1s, hit whenever the MCP passes
+					// an env LLM config). Two guards: skip configure when the config is unchanged,
+					// and after a real change wait for the recreated agent before executing.
+					if (incomingConfig && lastConfigRef.current !== JSON.stringify(incomingConfig)) {
 						await configure({ ...config, ...incomingConfig } as ExtConfig)
+						lastConfigRef.current = JSON.stringify(incomingConfig)
+						await new Promise((r) => setTimeout(r, 300)) // let the [config] effect swap agents
 					}
 					const result = await execute(task)
 					return { success: result.success, data: result.data, history: result.history }
