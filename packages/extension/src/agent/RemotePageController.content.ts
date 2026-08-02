@@ -7,15 +7,22 @@ export function initPageController() {
 	let pageController: PageController | null = null
 	let intervalID: number | null = null
 
-	const myTabIdPromise = chrome.runtime
-		.sendMessage({ type: 'PAGE_CONTROL', action: 'get_my_tab_id' })
-		.then((response) => {
-			return (response as { tabId: number | null }).tabId
-		})
-		.catch((error) => {
-			console.error('[RemotePageController.ContentScript]: Failed to get my tab id', error)
-			return null
-		})
+	// KNOVA: chrome.runtime.sendMessage THROWS synchronously (not rejects) once the extension
+	// context is invalidated, so .catch() below never sees it — that one-shot at module init was
+	// still producing "Extension context invalidated" after a reload even with the interval
+	// guarded. Wrap the call itself.
+	const myTabIdPromise = (() => {
+		try {
+			return chrome.runtime
+				.sendMessage({ type: 'PAGE_CONTROL', action: 'get_my_tab_id' })
+				.then((response) => {
+					return (response as { tabId: number | null }).tabId
+				})
+				.catch(() => null) as Promise<number | null>
+		} catch {
+			return Promise.resolve(null) // context already gone; the interval guard stops the rest
+		}
+	})()
 
 	function getPC(): PageController {
 		if (!pageController) {
