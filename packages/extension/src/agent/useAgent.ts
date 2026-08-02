@@ -74,6 +74,15 @@ export function useAgent(): UseAgentResult {
 		const agent = new MultiPageAgent({
 			...agentConfig,
 			instructions: systemInstruction ? { system: systemInstruction } : undefined,
+			// KNOVA: upstream never set onAskUser, and PageAgentCore DELETES the ask_user tool when
+			// the callback is absent — so ask_user has been dead in this extension all along. Our
+			// caller is headless (the KNOVA manager over the hub WS), so a mid-task modal is useless;
+			// instead steer the model to abort WITH the question in the result. The manager answers
+			// from its private notes and re-delegates with the answer embedded (turn-level relay —
+			// execute_task is a blocking call, nothing can be injected mid-flight).
+			onAskUser: async (question) =>
+				`SYSTEM NOTICE: the user cannot be reached mid-task. Call the done tool NOW with ` +
+				`success=false and text exactly "ASK_USER: ${question}". Do nothing else first.`,
 		})
 		agentRef.current = agent
 
