@@ -10,10 +10,18 @@
  *
  * Outbound (Hub → Caller):
  *   { type: "ready" }
- *   { type: "result", success: boolean, data: string }
+ *   { type: "activity", activity: AgentActivity }          // KNOVA: live step trace
+ *   { type: "result", success: boolean, data: string, history?: HistoricalEvent[] }
  *   { type: "error", message: string }
+ *
+ * KNOVA fork note (2026-08-01): upstream only ever sent `result.data`, so a caller
+ * driving the hub over MCP saw a task go silent and come back "fail" with no way to
+ * tell WHY — the step-by-step trace existed but was rendered locally and never left
+ * the browser. Two additions, both purely additive so upstream rebases stay small:
+ *   · `activity` — pushed as each step happens, so the caller can decide WHEN to stop
+ *   · `history`  — the full ExecutionResult.history, which was being discarded
  */
-import type { ExecutionResult } from '@page-agent/core'
+import type { AgentActivity, ExecutionResult, HistoricalEvent } from '@page-agent/core'
 import { useEffect, useRef, useState } from 'react'
 
 import type { ExtConfig } from '@/agent/useAgent'
@@ -40,6 +48,14 @@ interface ResultMessage {
 	type: 'result'
 	success: boolean
 	data: string
+	/** KNOVA: full step trace. Upstream dropped this — it is what makes a failure diagnosable. */
+	history?: HistoricalEvent[]
+}
+
+/** KNOVA: one step, pushed live while the task runs. */
+interface ActivityMessage {
+	type: 'activity'
+	activity: AgentActivity
 }
 
 interface ErrorMessage {
@@ -47,7 +63,7 @@ interface ErrorMessage {
 	message: string
 }
 
-type OutboundMessage = ReadyMessage | ResultMessage | ErrorMessage
+type OutboundMessage = ReadyMessage | ActivityMessage | ResultMessage | ErrorMessage
 
 export type HubWsState = 'connecting' | 'connected' | 'disconnected'
 
@@ -57,7 +73,7 @@ export interface HubWsHandlers {
 	onExecute: (
 		task: string,
 		config?: Record<string, unknown>
-	) => Promise<{ success: boolean; data: string }>
+	) => Promise<{ success: boolean; data: string; history?: HistoricalEvent[] }>
 	onStop: () => void
 }
 
@@ -172,6 +188,11 @@ export class HubWs {
 		return ok
 	}
 
+	/** KNOVA: push one live step to the caller. No-op unless a task is running. */
+	sendActivity(activity: AgentActivity) {
+		if (this.#busy) this.#send({ type: 'activity', activity })
+	}
+
 	async #handleExecute(msg: ExecuteMessage) {
 		if (this.#busy) {
 			this.#send({ type: 'error', message: 'Hub is busy with another task' })
@@ -181,7 +202,12 @@ export class HubWs {
 		this.#busy = true
 		try {
 			const result = await this.#handlers.onExecute(msg.task, msg.config)
-			this.#send({ type: 'result', success: result.success, data: result.data })
+			this.#send({
+				type: 'result',
+				success: result.success,
+				data: result.data,
+				history: result.history,
+			})
 		} catch (err) {
 			this.#send({ type: 'error', message: err instanceof Error ? err.message : String(err) })
 		} finally {
@@ -200,7 +226,9 @@ export function useHubWs(
 	execute: (task: string) => Promise<ExecutionResult>,
 	stop: () => void,
 	configure: (config: ExtConfig) => Promise<void>,
-	config: ExtConfig | null
+	config: ExtConfig | null,
+	/** KNOVA: current step from useAgent(); forwarded to the caller as it changes. */
+	activity?: AgentActivity | null
 ): { wsState: HubWsState } {
 	const wsPort = new URLSearchParams(location.search).get('ws')
 	const [wsState, setWsState] = useState<HubWsState>(() => (wsPort ? 'connecting' : 'disconnected'))
@@ -223,7 +251,7 @@ export function useHubWs(
 						await configure({ ...config, ...incomingConfig } as ExtConfig)
 					}
 					const result = await execute(task)
-					return { success: result.success, data: result.data }
+					return { success: result.success, data: result.data, history: result.history }
 				},
 				onStop: () => latestRef.current.stop(),
 			},
@@ -238,6 +266,12 @@ export function useHubWs(
 			hubWsRef.current = null
 		}
 	}, [wsPort])
+
+	// KNOVA: forward every step as it happens. useAgent() already tracks `activity`;
+	// upstream just never sent it anywhere but the local UI.
+	useEffect(() => {
+		if (activity) hubWsRef.current?.sendActivity(activity)
+	}, [activity])
 
 	return { wsState }
 }

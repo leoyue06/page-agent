@@ -50,13 +50,34 @@ mcpServer.registerTool(
 		try {
 			const config = Object.keys(llmConfig).length > 0 ? llmConfig : undefined
 			const result = await hub.executeTask(task, config)
+			// KNOVA: append the step trace so a failure is diagnosable. Upstream returned
+			// only `data`, which made "it tried 20 times and gave up" indistinguishable
+			// from "it failed immediately" — see docs/page-agent-integration-log.html §3.
+			const steps = hub.activities || []
+			const trace = steps.length
+				? '\n\n--- Steps (' +
+					steps.length +
+					') ---\n' +
+					steps
+						.map(
+							(a, i) =>
+								`${i + 1}. ${a.type}` +
+								(a.tool ? ` · ${a.tool}` : '') +
+								(a.attempt ? ` · retry ${a.attempt}/${a.maxAttempts}` : '') +
+								(a.duration ? ` · ${a.duration}ms` : '') +
+								(a.message ? ` · ${a.message}` : '') +
+								(a.output ? `\n   → ${String(a.output).slice(0, 200)}` : '')
+						)
+						.join('\n')
+				: ''
 			return {
 				content: [
 					{
 						type: 'text',
-						text: result.success
-							? `Task completed.\n\n${result.data}`
-							: `Task failed.\n\n${result.data}`,
+						text:
+							(result.success
+								? `Task completed.\n\n${result.data}`
+								: `Task failed.\n\n${result.data}`) + trace,
 					},
 				],
 			}
@@ -78,7 +99,22 @@ mcpServer.registerTool(
 		content: [
 			{
 				type: 'text',
-				text: JSON.stringify({ connected: hub.connected, busy: hub.busy }, null, 2),
+				// KNOVA: `steps` lets the caller watch a running task and decide when to
+				// stop_task, rather than waiting out a silent run and getting only "fail".
+				text: JSON.stringify(
+					{
+						connected: hub.connected,
+						busy: hub.busy,
+						steps: (hub.activities || []).map((a) => ({
+							type: a.type,
+							...(a.tool ? { tool: a.tool } : {}),
+							...(a.attempt ? { retry: `${a.attempt}/${a.maxAttempts}` } : {}),
+							...(a.message ? { message: a.message } : {}),
+						})),
+					},
+					null,
+					2
+				),
 			},
 		],
 	})

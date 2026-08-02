@@ -31,8 +31,14 @@ export class HubBridge {
 	/** @type {import('ws').WebSocket | null} */
 	#hub = null
 
-	/** @type {{ resolve: (r: {success: boolean, data: string}) => void, reject: (e: Error) => void } | null} */
+	/** @type {{ resolve: (r: {success: boolean, data: string, history?: unknown[]}) => void, reject: (e: Error) => void } | null} */
 	#pendingTask = null
+
+	/** KNOVA: live step trace for the task in flight — get_status exposes it so the caller
+	 *  can watch progress and decide when to stop_task, instead of waiting out a silent
+	 *  30s and getting an undiagnosable "fail". Cleared when a new task starts. */
+	/** @type {unknown[]} */
+	#activities = []
 
 	/** @param {number} port */
 	constructor(port) {
@@ -76,6 +82,11 @@ export class HubBridge {
 		return this.#pendingTask !== null
 	}
 
+	/** KNOVA: steps observed so far for the task in flight (or the last one). */
+	get activities() {
+		return this.#activities
+	}
+
 	/**
 	 * @param {string} task
 	 * @param {Record<string, unknown>} [config]
@@ -85,6 +96,7 @@ export class HubBridge {
 		if (!this.connected) throw new Error('Hub is not connected. Is the extension running?')
 		if (this.#pendingTask) throw new Error('Agent is already running a task.')
 
+		this.#activities = [] // KNOVA: fresh trace per task
 		return new Promise((resolve, reject) => {
 			this.#pendingTask = { resolve, reject }
 			this.#hub.send(JSON.stringify({ type: 'execute', task, config }))
@@ -118,8 +130,20 @@ export class HubBridge {
 				return
 			}
 
+			if (msg.type === 'activity') {
+				this.#activities.push({ at: Date.now(), ...msg.activity })
+				const a = msg.activity || {}
+				console.error(
+					`[page-agent-mcp] step: ${a.type}${a.tool ? ' ' + a.tool : ''}${a.attempt ? ` (${a.attempt}/${a.maxAttempts})` : ''}`
+				)
+				return
+			}
 			if (msg.type === 'result') {
-				this.#pendingTask?.resolve({ success: msg.success ?? false, data: msg.data ?? '' })
+				this.#pendingTask?.resolve({
+					success: msg.success ?? false,
+					data: msg.data ?? '',
+					history: msg.history, // KNOVA: upstream discarded this
+				})
 				this.#pendingTask = null
 			} else if (msg.type === 'error') {
 				this.#pendingTask?.reject(new Error(msg.message ?? 'Unknown error from hub'))

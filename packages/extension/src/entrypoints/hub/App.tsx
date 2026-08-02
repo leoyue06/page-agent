@@ -11,7 +11,7 @@ import { useHubWs } from './hub-ws'
 
 export default function App() {
 	const { status, history, activity, currentTask, config, execute, stop, configure } = useAgent()
-	const { wsState } = useHubWs(execute, stop, configure, config)
+	const { wsState } = useHubWs(execute, stop, configure, config, activity)
 
 	const historyRef = useRef<HTMLDivElement>(null)
 
