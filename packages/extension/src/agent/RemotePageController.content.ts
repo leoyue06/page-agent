@@ -21,7 +21,14 @@ export function initPageController() {
 		if (!pageController) {
 			pageController = new PageController({
 				enableMask: false,
-				viewportExpansion: 400,
+				// KNOVA: -1 = index the WHOLE page, not viewport+400px. The windowed default made
+				// any form below the fold literally unreachable: its inputs were never put in the
+				// index, so input_text failed with "No interactive element found at index N" and
+				// scroll could not rescue it (on Greenhouse boards scroll reports "already at the
+				// bottom" from the very top). Measured on a real application form: 3 indexed
+				// elements before, the full form after. PageController already supports -1 and
+				// even labels the snapshot "(full page)" — upstream just never turned it on here.
+				viewportExpansion: -1,
 			})
 		}
 		return pageController
