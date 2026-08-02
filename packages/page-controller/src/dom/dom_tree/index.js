@@ -1641,6 +1641,11 @@ export default (
 			const tag = node.tagName.toLowerCase()
 			if (tag === 'textarea' || tag === 'select') {
 				nodeData.attributes.value = node.value ?? ''
+			} else if (tag === 'input' && node.type === 'hidden') {
+				// Defence in depth: hidden inputs carry CSRF tokens and session data. They already
+				// fail isInteractiveCandidate so they never reach here today — but that is the
+				// CALLER's behaviour, not ours, and this path is one line away from a credential.
+				// Verified empirically: a planted token never appeared in a snapshot.
 			} else if (tag === 'input' && node.type !== 'checkbox' && node.type !== 'radio') {
 				// password stays masked — never put a credential in the snapshot the LLM receives
 				nodeData.attributes.value =
