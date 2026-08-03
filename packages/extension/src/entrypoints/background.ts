@@ -1,5 +1,5 @@
 import { handlePageControlMessage } from '@/agent/RemotePageController.background'
-import { getAgentWindowId, handleTabControlMessage } from '@/agent/TabsController.background'
+import { handleTabControlMessage } from '@/agent/TabsController.background'
 
 export default defineBackground(() => {
 	console.log('[Background] Service Worker started')
@@ -85,7 +85,6 @@ async function openOrFocusHubTab(wsPort: number) {
 	// KNOVA: the hub belongs in the agent window, never the user's. Upstream created it with
 	// `pinned: true` and no windowId — which is why it always appeared pinned at the far LEFT of
 	// whatever window the user was reading — and re-focused it with `active: true`.
-	const windowId = await getAgentWindowId().catch(() => undefined)
 
 	if (existing.length > 0 && existing[0].id) {
 		// KNOVA: NEVER reload a hub that is already correct. This function runs on every service
@@ -97,11 +96,26 @@ async function openOrFocusHubTab(wsPort: number) {
 		// The revive path has to be IDEMPOTENT(幂等) — running it again must be a no-op.
 		const want = `${hubUrl}?ws=${wsPort}`
 		if (existing[0].url !== want) await chrome.tabs.update(existing[0].id, { url: want }) // no active:true
-		if (windowId != null && existing[0].windowId !== windowId) {
-			await chrome.tabs.move(existing[0].id, { windowId, index: -1 }).catch(() => {})
+
+		// ONE hub, ONE window. Extra hubs are the leftovers of the stale-windowId bug: a saved
+		// numeric windowId does not survive a browser restart, so every launch made a FRESH agent
+		// window while session-restore brought the old one back too — Leo counted three. Each extra
+		// hub also fights for the single MCP connection. Drop the duplicates, and take their window
+		// with them when nothing but our own scratch tabs is left in it.
+		for (const dup of existing.slice(1)) {
+			if (dup.id == null) continue
+			await chrome.tabs.remove(dup.id).catch(() => {})
+			if (dup.windowId == null) continue
+			const rest = await chrome.tabs.query({ windowId: dup.windowId }).catch(() => [])
+			const ours = (t: chrome.tabs.Tab) => t.url === 'about:blank' || !!t.url?.startsWith(hubUrl)
+			if (rest.length > 0 && rest.every(ours)) {
+				await chrome.windows.remove(dup.windowId).catch(() => {})
+			}
 		}
 		return
 	}
 
-	await chrome.tabs.create({ url: `${hubUrl}?ws=${wsPort}`, windowId, active: false })
+	// No hub anywhere → give it its OWN window immediately. Creating the window WITH the hub url
+	// (rather than about:blank and then a tab) is also what stops the stray about:blank appearing.
+	await chrome.windows.create({ url: `${hubUrl}?ws=${wsPort}`, focused: false })
 }

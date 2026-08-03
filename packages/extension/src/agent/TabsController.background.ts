@@ -46,22 +46,28 @@ async function resolveActiveTab(
 
 /**
  * KNOVA: resolve (or lazily create) the DEDICATED window all agent work happens in, so the agent
- * never opens tabs in the window the user is reading. Created unfocused; the id is persisted so
- * the same window is reused across tasks and browser sessions until the user closes it.
+ * never opens tabs in the window the user is reading.
+ *
+ * The marker is the HUB TAB, not a saved id. The previous version persisted the numeric windowId
+ * in storage.local, which is wrong in a way that only shows up after a browser restart: Chrome
+ * window ids are PER-SESSION. After a restart the saved id is either
+ *   (a) gone      → we created a brand-new agent window on every launch, and since session-restore
+ *                   also brings the OLD agent window back, the windows multiplied one per restart
+ *                   (Leo saw three), or
+ *   (b) REUSED    → the id now belongs to one of the user's own restored windows, and every agent
+ *                   tab opens right in the window he is reading. That is the exact failure this
+ *                   window exists to prevent, and it is silent.
+ *
+ * The hub tab survives restore, lives only in the agent window, and is guaranteed to exist by the
+ * keepalive alarm — so it is a durable marker with no state to go stale. No storage key at all.
  */
 export async function getAgentWindowId(): Promise<number> {
-	const stored = (await chrome.storage.local.get('knovaAgentWindowId')).knovaAgentWindowId
-	if (typeof stored === 'number') {
-		try {
-			const w = await chrome.windows.get(stored)
-			if (w?.id != null) return w.id
-		} catch {
-			/* the user closed it — make a new one */
-		}
-	}
+	const hub = await chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` })
+	const windowId = hub[0]?.windowId
+	if (windowId != null) return windowId
+
 	const win = await chrome.windows.create({ url: 'about:blank', focused: false })
 	if (win?.id == null) throw new Error('Failed to create the agent window')
-	await chrome.storage.local.set({ knovaAgentWindowId: win.id })
 	return win.id
 }
 
