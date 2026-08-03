@@ -51,7 +51,13 @@ export default defineBackground(() => {
 	// window. Revive it on startup and on install/update, in the agent window, unfocused.
 	const reviveHub = () => {
 		void chrome.storage.local.get('knovaHubWsPort').then(({ knovaHubWsPort }) => {
-			if (typeof knovaHubWsPort === 'number') void openOrFocusHubTab(knovaHubWsPort)
+			// Default to the MCP's own default port. Gating this on "have we stored a port"
+			// meant a fresh install did nothing at all — the key is only written when the
+			// launcher page sends OPEN_HUB, so before the user's first manual visit the revive
+			// was a silent no-op, indistinguishable from the feature not existing.
+			const port = typeof knovaHubWsPort === 'number' ? knovaHubWsPort : 38401
+			console.log('[KNOVA] reviving hub on port', port)
+			void openOrFocusHubTab(port)
 		})
 	}
 	chrome.runtime.onStartup.addListener(reviveHub)
