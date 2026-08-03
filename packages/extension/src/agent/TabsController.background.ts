@@ -151,6 +151,13 @@ export function handleTabControlMessage(
 			resolveActiveTab(payload, sender)
 				.then((tab) => {
 					debug('get_active_tab: success', tab)
+					knovaLog('route:get_active_tab', {
+						payloadWindowId: payload?.windowId ?? null,
+						senderTabId: sender.tab?.id ?? null,
+						resolvedTabId: tab.id,
+						resolvedWindowId: tab.windowId,
+						resolvedUrl: tab.url ?? tab.pendingUrl ?? null,
+					})
 					sendResponse({ success: true, tab })
 				})
 				.catch((error) => {
@@ -182,6 +189,12 @@ export function handleTabControlMessage(
 				.create({ url: payload.url, windowId: payload.windowId, active: false })
 				.then((newTab) => {
 					debug('open_new_tab: success', newTab)
+					knovaLog('route:open_new_tab', {
+						payloadWindowId: payload.windowId ?? null,
+						url: payload.url,
+						newTabId: newTab.id,
+						landedWindowId: newTab.windowId,
+					})
 					sendResponse({ success: true, tabId: newTab.id })
 				})
 				.catch((error) => {
@@ -192,6 +205,10 @@ export function handleTabControlMessage(
 
 		case 'create_tab_group': {
 			debug('create_tab_group', payload)
+			knovaLog('route:create_tab_group', {
+				payloadWindowId: payload.windowId ?? null,
+				tabIds: payload.tabIds,
+			})
 			chrome.tabs
 				.group({ tabIds: payload.tabIds, createProperties: { windowId: payload.windowId } })
 				.then((groupId) => {

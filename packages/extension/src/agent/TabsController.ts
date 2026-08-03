@@ -80,6 +80,20 @@ export class TabsController {
 		// tab always sits alone in its own window. Upstream's logic then puts every agent tab in
 		// that window for free — no second window factory, nothing to race, nothing to go stale.
 		const targetWindowId = await getOwnWindowId()
+		// KNOVA telemetry: this is the number every later open_new_tab/create_tab_group inherits.
+		try {
+			void fetch('http://127.0.0.1:38403/log', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					event: 'route:initTask',
+					ownWindowId: targetWindowId ?? null,
+					href: location.href.slice(0, 80),
+				}),
+			}).catch(() => {})
+		} catch {
+			/* telemetry only */
+		}
 
 		const activeTabResult = await sendMessage({
 			type: 'TAB_CONTROL',
