@@ -88,7 +88,15 @@ async function openOrFocusHubTab(wsPort: number) {
 	const windowId = await getAgentWindowId().catch(() => undefined)
 
 	if (existing.length > 0 && existing[0].id) {
-		await chrome.tabs.update(existing[0].id, { url: `${hubUrl}?ws=${wsPort}` }) // no active:true
+		// KNOVA: NEVER reload a hub that is already correct. This function runs on every service
+		// worker start, and MV3 restarts the worker constantly — the keepalive alarm alone wakes
+		// it once a minute, which re-runs the top-level reviveHub(). With an unconditional
+		// tabs.update() that reloaded the LIVE hub every 60s, dropping its WebSocket each time.
+		// Measured before the fix: disconnect/connect pairs at 22s / 82s / 144s with no task
+		// running, and a real task that died with "Hub disconnected while task was running".
+		// The revive path has to be IDEMPOTENT(幂等) — running it again must be a no-op.
+		const want = `${hubUrl}?ws=${wsPort}`
+		if (existing[0].url !== want) await chrome.tabs.update(existing[0].id, { url: want }) // no active:true
 		if (windowId != null && existing[0].windowId !== windowId) {
 			await chrome.tabs.move(existing[0].id, { windowId, index: -1 }).catch(() => {})
 		}
