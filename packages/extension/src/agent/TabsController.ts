@@ -66,10 +66,29 @@ export class TabsController {
 		this.experimentalIncludeAllTabs = experimentalIncludeAllTabs
 		this.task = task
 
+		// KNOVA: work in a DEDICATED window, not the one holding the hub tab (which is usually the
+		// window the user is reading). Upstream used getOwnWindowId(), so every agent tab landed in
+		// the user's working window; the only workaround was dragging the hub tab out by hand.
+		// The background script creates this window unfocused on first use and reuses it after,
+		// so the user can minimise it once and never see it again. Falls back to the old behaviour
+		// if window creation is unavailable, rather than failing the task.
+		let targetWindowId: number | undefined
+		try {
+			const agentWin = await sendMessage({
+				type: 'TAB_CONTROL',
+				action: 'get_agent_window',
+				payload: {},
+			})
+			targetWindowId = (agentWin as { windowId?: number }).windowId
+		} catch {
+			/* fall back below */
+		}
+		if (targetWindowId == null) targetWindowId = await getOwnWindowId()
+
 		const activeTabResult = await sendMessage({
 			type: 'TAB_CONTROL',
 			action: 'get_active_tab',
-			payload: { windowId: await getOwnWindowId() },
+			payload: { windowId: targetWindowId },
 		})
 
 		this.initialTabId = activeTabResult.tab?.id
@@ -409,6 +428,7 @@ export type TabAction =
 	| 'close_tab'
 	| 'get_tab_title'
 	| 'get_window_tabs'
+	| 'get_agent_window'
 
 interface TabMeta {
 	id: number

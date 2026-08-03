@@ -79,6 +79,32 @@ export function handleTabControlMessage(
 			return true // async response
 		}
 
+		// KNOVA: resolve (or lazily create) a DEDICATED window for agent work, so the agent never
+		// opens tabs in the window the user is reading. Created with focused:false so it does not
+		// steal focus, and reused across tasks — the user can minimise it once and forget it.
+		case 'get_agent_window': {
+			;(async () => {
+				const stored = (await chrome.storage.local.get('knovaAgentWindowId')).knovaAgentWindowId
+				if (typeof stored === 'number') {
+					try {
+						const w = await chrome.windows.get(stored)
+						if (w?.id != null) return { windowId: w.id }
+					} catch {
+						/* window was closed by the user — fall through and make a new one */
+					}
+				}
+				const win = await chrome.windows.create({ url: 'about:blank', focused: false })
+				if (win?.id == null) throw new Error('Failed to create the agent window')
+				await chrome.storage.local.set({ knovaAgentWindowId: win.id })
+				return { windowId: win.id }
+			})()
+				.then((r) => sendResponse({ success: true, ...r }))
+				.catch((error) =>
+					sendResponse({ error: error instanceof Error ? error.message : String(error) })
+				)
+			break
+		}
+
 		case 'open_new_tab': {
 			debug('open_new_tab', payload)
 			chrome.tabs
