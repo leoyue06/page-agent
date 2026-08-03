@@ -130,6 +130,21 @@ async function openOrFocusHubTab(wsPort: number) {
 		// running, and a real task that died with "Hub disconnected while task was running".
 		// The revive path has to be IDEMPOTENT(幂等) — running it again must be a no-op.
 		const want = `${hubUrl}?ws=${wsPort}`
+
+		// THE INVARIANT that replaces the whole get_agent_window layer: the hub tab sits ALONE in
+		// its own window. Upstream then routes every agent tab to the hub's window (TabsController
+		// runs inside the hub page, so windows.getCurrent() IS that window) with active:false — so
+		// "never touch the window Leo is reading" comes for free, with no second window factory.
+		// The one case that breaks it is Leo opening the hub url by hand in his working window;
+		// moving it out is a single call and makes the invariant self-healing.
+		const roommates = (
+			await chrome.tabs.query({ windowId: existing[0].windowId }).catch(() => [])
+		).filter((t) => t.id !== existing[0].id)
+		if (roommates.length > 0) {
+			knovaLog('hub:evicting', { from: existing[0].windowId, roommates: roommates.length })
+			await chrome.windows.create({ tabId: existing[0].id, focused: false }).catch(() => {})
+		}
+
 		knovaLog('hub:reuse', {
 			tabId: existing[0].id,
 			windowId: existing[0].windowId,

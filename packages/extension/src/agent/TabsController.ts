@@ -66,33 +66,20 @@ export class TabsController {
 		this.experimentalIncludeAllTabs = experimentalIncludeAllTabs
 		this.task = task
 
-		// KNOVA: work in a DEDICATED window, not the one holding the hub tab (which is usually the
-		// window the user is reading). Upstream used getOwnWindowId(), so every agent tab landed in
-		// the user's working window; the only workaround was dragging the hub tab out by hand.
-		// The background script creates this window unfocused on first use and reuses it after,
-		// so the user can minimise it once and never see it again. Falls back to the old behaviour
-		// if window creation is unavailable, rather than failing the task.
-		let targetWindowId: number | undefined
-		try {
-			const agentWin = await sendMessage({
-				type: 'TAB_CONTROL',
-				action: 'get_agent_window',
-				payload: {},
-			})
-			targetWindowId = (agentWin as { windowId?: number }).windowId
-		} catch (e) {
-			console.error('[KNOVA] get_agent_window threw', e)
-		}
-		if (targetWindowId == null) {
-			// Loud on purpose. A silent fallback here cost a whole round: the handler was ending
-			// with `break` instead of `return true`, so sendResponse never delivered, this went
-			// undefined, and the agent quietly worked in the user's own window while the (created,
-			// unused) agent window sat empty as apparent proof it was working.
-			console.warn(
-				'[KNOVA] no agent window — FALLING BACK to the hub window; tabs will open where the user is reading'
-			)
-			targetWindowId = await getOwnWindowId()
-		}
+		// KNOVA: use UPSTREAM's getOwnWindowId() — this file runs inside the hub page, so
+		// windows.getCurrent() is the window the hub lives in, and upstream already sends every
+		// agent tab there with active:false. We used to ask the background for a separately
+		// created "agent window" instead; that layer had its OWN chrome.windows.create fallback,
+		// which fired whenever the hub was momentarily unfindable — i.e. exactly during an
+		// extension reload, while this very page was still booting. That was the second window
+		// factory, and the one that kept spawning blank windows AFTER the hub-side multiplication
+		// was fixed (/tmp/knova-ext.log 03:06-03:12: zero hub:created-window, yet two
+		// chrome://newtab windows present).
+		//
+		// The isolation Leo wants now comes from ONE invariant enforced in background.ts: the hub
+		// tab always sits alone in its own window. Upstream's logic then puts every agent tab in
+		// that window for free — no second window factory, nothing to race, nothing to go stale.
+		const targetWindowId = await getOwnWindowId()
 
 		const activeTabResult = await sendMessage({
 			type: 'TAB_CONTROL',
@@ -437,7 +424,6 @@ export type TabAction =
 	| 'close_tab'
 	| 'get_tab_title'
 	| 'get_window_tabs'
-	| 'get_agent_window'
 
 interface TabMeta {
 	id: number

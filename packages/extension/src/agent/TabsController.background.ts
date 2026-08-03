@@ -138,16 +138,6 @@ export async function findHubTabs(): Promise<chrome.tabs.Tab[]> {
 	return hubs
 }
 
-export async function getAgentWindowId(): Promise<number> {
-	const hub = await findHubTabs()
-	const windowId = hub[0]?.windowId
-	if (windowId != null) return windowId
-
-	const win = await chrome.windows.create({ url: 'about:blank', focused: false })
-	if (win?.id == null) throw new Error('Failed to create the agent window')
-	return win.id
-}
-
 export function handleTabControlMessage(
 	message: { type: 'TAB_CONTROL'; action: TabAction; payload: any },
 	sender: chrome.runtime.MessageSender,
@@ -186,16 +176,6 @@ export function handleTabControlMessage(
 		// KNOVA: resolve (or lazily create) a DEDICATED window for agent work, so the agent never
 		// opens tabs in the window the user is reading. Created with focused:false so it does not
 		// steal focus, and reused across tasks — the user can minimise it once and forget it.
-		case 'get_agent_window': {
-			getAgentWindowId()
-				.then((windowId) => sendResponse({ success: true, windowId }))
-				.catch((error) =>
-					sendResponse({ error: error instanceof Error ? error.message : String(error) })
-				)
-			return true // async response — WITHOUT this Chrome closes the channel and
-			// sendResponse becomes a no-op, so the caller silently gets undefined
-		}
-
 		case 'open_new_tab': {
 			debug('open_new_tab', payload)
 			chrome.tabs
