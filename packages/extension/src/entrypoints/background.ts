@@ -57,6 +57,19 @@ export default defineBackground(() => {
 	chrome.runtime.onStartup.addListener(reviveHub)
 	chrome.runtime.onInstalled.addListener(reviveHub)
 	reviveHub() // service worker just woke up (e.g. after a reload) — bring it back now too
+
+	// The three hooks above are not enough on their own: if the user CLOSES the hub tab, nothing
+	// happens afterwards to wake this service worker, so the hub stays dead and the next task
+	// fails with "Extension hub never connected" — the user then has to visit localhost:PORT by
+	// hand, which is the manual step all of this exists to remove. An alarm is the MV3 way to get
+	// a periodic wake-up; it fires roughly every minute and only acts when the hub is missing.
+	chrome.alarms.create('knova-hub-keepalive', { periodInMinutes: 1 })
+	chrome.alarms.onAlarm.addListener((alarm) => {
+		if (alarm.name !== 'knova-hub-keepalive') return
+		void chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` }).then((tabs) => {
+			if (tabs.length === 0) reviveHub()
+		})
+	})
 })
 
 async function openOrFocusHubTab(wsPort: number) {
