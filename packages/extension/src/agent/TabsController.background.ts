@@ -44,6 +44,27 @@ async function resolveActiveTab(
 	)
 }
 
+/**
+ * KNOVA: resolve (or lazily create) the DEDICATED window all agent work happens in, so the agent
+ * never opens tabs in the window the user is reading. Created unfocused; the id is persisted so
+ * the same window is reused across tasks and browser sessions until the user closes it.
+ */
+export async function getAgentWindowId(): Promise<number> {
+	const stored = (await chrome.storage.local.get('knovaAgentWindowId')).knovaAgentWindowId
+	if (typeof stored === 'number') {
+		try {
+			const w = await chrome.windows.get(stored)
+			if (w?.id != null) return w.id
+		} catch {
+			/* the user closed it — make a new one */
+		}
+	}
+	const win = await chrome.windows.create({ url: 'about:blank', focused: false })
+	if (win?.id == null) throw new Error('Failed to create the agent window')
+	await chrome.storage.local.set({ knovaAgentWindowId: win.id })
+	return win.id
+}
+
 export function handleTabControlMessage(
 	message: { type: 'TAB_CONTROL'; action: TabAction; payload: any },
 	sender: chrome.runtime.MessageSender,
@@ -83,35 +104,8 @@ export function handleTabControlMessage(
 		// opens tabs in the window the user is reading. Created with focused:false so it does not
 		// steal focus, and reused across tasks — the user can minimise it once and forget it.
 		case 'get_agent_window': {
-			;(async () => {
-				const stored = (await chrome.storage.local.get('knovaAgentWindowId')).knovaAgentWindowId
-				if (typeof stored === 'number') {
-					try {
-						const w = await chrome.windows.get(stored)
-						if (w?.id != null) return { windowId: w.id }
-					} catch {
-						/* window was closed by the user — fall through and make a new one */
-					}
-				}
-				const win = await chrome.windows.create({ url: 'about:blank', focused: false })
-				if (win?.id == null) throw new Error('Failed to create the agent window')
-				await chrome.storage.local.set({ knovaAgentWindowId: win.id })
-				// Bring the hub tab along. It is a permanent control page the user opened once, and
-				// it never gets navigated by the agent — but leaving it behind means half of
-				// page-agent still lives in the window the user is reading. Moving a tab between
-				// windows does NOT reload it, so the hub's WebSocket to the MCP survives intact.
-				try {
-					const hubTabs = await chrome.tabs.query({
-						url: `chrome-extension://${chrome.runtime.id}/hub.html*`,
-					})
-					const hubIds = hubTabs.map((t) => t.id).filter((id): id is number => id != null)
-					if (hubIds.length) await chrome.tabs.move(hubIds, { windowId: win.id, index: -1 })
-				} catch {
-					/* hub not open, or the move was refused — the agent window still works */
-				}
-				return { windowId: win.id }
-			})()
-				.then((r) => sendResponse({ success: true, ...r }))
+			getAgentWindowId()
+				.then((windowId) => sendResponse({ success: true, windowId }))
 				.catch((error) =>
 					sendResponse({ error: error instanceof Error ? error.message : String(error) })
 				)
