@@ -141,7 +141,7 @@ export class PageController extends EventTarget {
 		// whether a patch was actually loaded in Chrome — the file on disk was right, the manifest
 		// pointed at it, and the behaviour still said otherwise. Make the build identity OBSERVABLE
 		// instead of inferring it from symptoms. Bump this string with any dom_tree change.
-		const titleLine = `Current Page: [${title}](${url})  [knova-build:v4-agent-window]`
+		const titleLine = `Current Page: [${title}](${url})  [knova-build:v5-hub-moves]`
 
 		const pageInfoLine = `Page info: ${pi.viewport_width}x${pi.viewport_height}px viewport, ${pi.page_width}x${pi.page_height}px total page size, ${pi.pages_above.toFixed(1)} pages above, ${pi.pages_below.toFixed(1)} pages below, ${pi.total_pages.toFixed(1)} total pages, at ${(pi.current_page_position * 100).toFixed(0)}% of page`
 

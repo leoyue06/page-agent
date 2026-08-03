@@ -96,6 +96,19 @@ export function handleTabControlMessage(
 				const win = await chrome.windows.create({ url: 'about:blank', focused: false })
 				if (win?.id == null) throw new Error('Failed to create the agent window')
 				await chrome.storage.local.set({ knovaAgentWindowId: win.id })
+				// Bring the hub tab along. It is a permanent control page the user opened once, and
+				// it never gets navigated by the agent — but leaving it behind means half of
+				// page-agent still lives in the window the user is reading. Moving a tab between
+				// windows does NOT reload it, so the hub's WebSocket to the MCP survives intact.
+				try {
+					const hubTabs = await chrome.tabs.query({
+						url: `chrome-extension://${chrome.runtime.id}/hub.html*`,
+					})
+					const hubIds = hubTabs.map((t) => t.id).filter((id): id is number => id != null)
+					if (hubIds.length) await chrome.tabs.move(hubIds, { windowId: win.id, index: -1 })
+				} catch {
+					/* hub not open, or the move was refused — the agent window still works */
+				}
 				return { windowId: win.id }
 			})()
 				.then((r) => sendResponse({ success: true, ...r }))
