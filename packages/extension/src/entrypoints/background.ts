@@ -1,5 +1,5 @@
 import { handlePageControlMessage } from '@/agent/RemotePageController.background'
-import { handleTabControlMessage } from '@/agent/TabsController.background'
+import { findHubTabs, handleTabControlMessage } from '@/agent/TabsController.background'
 
 export default defineBackground(() => {
 	console.log('[Background] Service Worker started')
@@ -49,16 +49,31 @@ export default defineBackground(() => {
 	// the localhost launcher page asked, so every browser restart, extension reload or lid-close
 	// left the user typing localhost:PORT by hand and then dragging the tab out of their working
 	// window. Revive it on startup and on install/update, in the agent window, unfocused.
+	// SERIALIZED, and that is the whole fix for the multiplying windows. reviveHub has THREE
+	// triggers that all fire within the same tick: on a reload, onInstalled AND the top-level call
+	// below; on a browser start, onStartup AND the top-level call. Each one did
+	//     query for a hub  →  await  →  create one if absent
+	// so every trigger looked before any of them had acted, all of them saw "no hub", and each
+	// created its own window. Together with the window session-restore brings back, that is exactly
+	// the three windows Leo kept getting — a classic check-then-act race, NOT a leak, which is why
+	// the duplicate-collapsing added earlier never fired: at check time there was nothing to
+	// collapse yet.
+	//
+	// Chaining the calls makes the second and third see the window the first created and no-op.
+	let reviveChain: Promise<unknown> = Promise.resolve()
 	const reviveHub = () => {
-		void chrome.storage.local.get('knovaHubWsPort').then(({ knovaHubWsPort }) => {
-			// Default to the MCP's own default port. Gating this on "have we stored a port"
-			// meant a fresh install did nothing at all — the key is only written when the
-			// launcher page sends OPEN_HUB, so before the user's first manual visit the revive
-			// was a silent no-op, indistinguishable from the feature not existing.
-			const port = typeof knovaHubWsPort === 'number' ? knovaHubWsPort : 38401
-			console.log('[KNOVA] reviving hub on port', port)
-			void openOrFocusHubTab(port)
-		})
+		reviveChain = reviveChain
+			.then(async () => {
+				const { knovaHubWsPort } = await chrome.storage.local.get('knovaHubWsPort')
+				// Default to the MCP's own default port. Gating this on "have we stored a port"
+				// meant a fresh install did nothing at all — the key is only written when the
+				// launcher page sends OPEN_HUB, so before the user's first manual visit the revive
+				// was a silent no-op, indistinguishable from the feature not existing.
+				const port = typeof knovaHubWsPort === 'number' ? knovaHubWsPort : 38401
+				console.log('[KNOVA] reviving hub on port', port)
+				await openOrFocusHubTab(port)
+			})
+			.catch((e) => console.warn('[KNOVA] revive failed', e))
 	}
 	chrome.runtime.onStartup.addListener(reviveHub)
 	chrome.runtime.onInstalled.addListener(reviveHub)
@@ -85,7 +100,7 @@ export default defineBackground(() => {
 		chrome.alarms.create('knova-hub-keepalive', { periodInMinutes: 1 })
 		chrome.alarms.onAlarm.addListener((alarm) => {
 			if (alarm.name !== 'knova-hub-keepalive') return
-			void chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` }).then((tabs) => {
+			void findHubTabs().then((tabs) => {
 				if (tabs.length === 0) reviveHub()
 			})
 		})
@@ -96,7 +111,7 @@ export default defineBackground(() => {
 
 async function openOrFocusHubTab(wsPort: number) {
 	const hubUrl = chrome.runtime.getURL('hub.html')
-	const existing = await chrome.tabs.query({ url: `${hubUrl}*` })
+	const existing = await findHubTabs()
 
 	// KNOVA: the hub belongs in the agent window, never the user's. Upstream created it with
 	// `pinned: true` and no windowId — which is why it always appeared pinned at the far LEFT of

@@ -61,8 +61,21 @@ async function resolveActiveTab(
  * The hub tab survives restore, lives only in the agent window, and is guaranteed to exist by the
  * keepalive alarm — so it is a durable marker with no state to go stale. No storage key at all.
  */
+/**
+ * KNOVA: find our hub tabs WITHOUT a match pattern. `tabs.query({url})` takes a match pattern, and
+ * match patterns officially cover http/https/file/ftp/urn — `chrome-extension://` is outside that
+ * set, so relying on it to find our own page is betting on undocumented behaviour, and an empty
+ * result here reads exactly like "no hub exists" and makes the caller open another one. Query all
+ * tabs and filter in JS: boring, documented, cannot silently return nothing.
+ */
+export async function findHubTabs(): Promise<chrome.tabs.Tab[]> {
+	const hubUrl = chrome.runtime.getURL('hub.html')
+	const all = await chrome.tabs.query({})
+	return all.filter((t) => t.url?.startsWith(hubUrl))
+}
+
 export async function getAgentWindowId(): Promise<number> {
-	const hub = await chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` })
+	const hub = await findHubTabs()
 	const windowId = hub[0]?.windowId
 	if (windowId != null) return windowId
 
