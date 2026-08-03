@@ -30,9 +30,6 @@ export default defineBackground(() => {
 
 	chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
 		if (message.type === 'OPEN_HUB') {
-			// KNOVA: remember the port so the hub can revive itself on the next browser start
-			// without the user having to visit the launcher URL by hand.
-			void chrome.storage.local.set({ knovaHubWsPort: message.wsPort })
 			knovaLog('OPEN_HUB', { wsPort: message.wsPort })
 			openOrFocusHubTab(message.wsPort).then(() => {
 				if (sender.tab?.id) chrome.tabs.remove(sender.tab.id)
@@ -46,71 +43,16 @@ export default defineBackground(() => {
 
 	chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {})
 
-	// KNOVA: the hub is infrastructure — it should start itself. Upstream only ever opened it when
-	// the localhost launcher page asked, so every browser restart, extension reload or lid-close
-	// left the user typing localhost:PORT by hand and then dragging the tab out of their working
-	// window. Revive it on startup and on install/update, in the agent window, unfocused.
-	// SERIALIZED, and that is the whole fix for the multiplying windows. reviveHub has THREE
-	// triggers that all fire within the same tick: on a reload, onInstalled AND the top-level call
-	// below; on a browser start, onStartup AND the top-level call. Each one did
-	//     query for a hub  →  await  →  create one if absent
-	// so every trigger looked before any of them had acted, all of them saw "no hub", and each
-	// created its own window. Together with the window session-restore brings back, that is exactly
-	// the three windows Leo kept getting — a classic check-then-act race, NOT a leak, which is why
-	// the duplicate-collapsing added earlier never fired: at check time there was nothing to
-	// collapse yet.
-	//
-	// Chaining the calls makes the second and third see the window the first created and no-op.
-	let reviveChain: Promise<unknown> = Promise.resolve()
-	const reviveHub = (trigger: string) => {
-		knovaLog('revive:queued', { trigger })
-		reviveChain = reviveChain
-			.then(async () => {
-				const { knovaHubWsPort } = await chrome.storage.local.get('knovaHubWsPort')
-				// Default to the MCP's own default port. Gating this on "have we stored a port"
-				// meant a fresh install did nothing at all — the key is only written when the
-				// launcher page sends OPEN_HUB, so before the user's first manual visit the revive
-				// was a silent no-op, indistinguishable from the feature not existing.
-				const port = typeof knovaHubWsPort === 'number' ? knovaHubWsPort : 38401
-				console.log('[KNOVA] reviving hub on port', port)
-				knovaLog('revive:start', { trigger, port })
-				await openOrFocusHubTab(port)
-				knovaLog('revive:done', { trigger })
-			})
-			.catch((e) => console.warn('[KNOVA] revive failed', e))
-	}
-	chrome.runtime.onStartup.addListener(() => reviveHub('onStartup'))
-	chrome.runtime.onInstalled.addListener(() => reviveHub('onInstalled'))
-	reviveHub('sw-start') // service worker just woke up (e.g. after a reload) — bring it back now too
-
-	// The three hooks above are not enough on their own: if the user CLOSES the hub tab, nothing
-	// happens afterwards to wake this service worker, so the hub stays dead and the next task
-	// fails with "Extension hub never connected" — the user then has to visit localhost:PORT by
-	// hand, which is the manual step all of this exists to remove. An alarm is the MV3 way to get
-	// a periodic wake-up; it fires roughly every minute and only acts when the hub is missing.
-	// GUARDED, and the guard is the point. This runs at the TOP LEVEL of an MV3 service worker,
-	// where a throw does not just skip the keepalive — it fails service-worker registration, and
-	// the worker is the spine of the whole chain (every TAB_CONTROL / PAGE_CONTROL message routes
-	// through it). One missing optional API therefore took down the entire extension.
-	//
-	// Measured 2026-08-02 from Chrome's own Secure Preferences: granted_permissions.api DID list
-	// "alarms", but the manifest snapshot Chrome had loaded did NOT — the reload had not picked up
-	// the new manifest from disk. So chrome.alarms was undefined, `.create` threw, registration
-	// failed with status 15 (kErrorScriptEvaluateFailed), and the symptom Leo saw was a dead
-	// extension with a hub that never came back.
-	//
-	// Degrading to "no keepalive" is survivable; taking the spine down is not.
-	if (chrome.alarms?.create) {
-		chrome.alarms.create('knova-hub-keepalive', { periodInMinutes: 1 })
-		chrome.alarms.onAlarm.addListener((alarm) => {
-			if (alarm.name !== 'knova-hub-keepalive') return
-			void findHubTabs().then((tabs) => {
-				if (tabs.length === 0) reviveHub('alarm')
-			})
-		})
-	} else {
-		console.warn('[KNOVA] chrome.alarms unavailable — hub keepalive disabled for this session')
-	}
+	// KNOVA — LAZY HUB (Leo's model, stated 2026-08-03, replacing six rounds of the opposite):
+	//   "打开 Chrome 的时候,就只是一个干干净净的 window。当有要求发过来的时候,你再根据需求开
+	//    这个 PageAgent designated window。没有就 create,有就沿用。"
+	// So the extension does NOTHING at startup, install, reload, or on a timer. The revive-on-start
+	// machinery (onStartup/onInstalled/top-level revive + keepalive alarm, v9–v16) is deleted — the
+	// telemetry showed it working exactly as written, and what it was written to do was the opposite
+	// of the requirement. The hub now opens on demand only: when a cloud task arrives and the hub is
+	// not connected, the WORKER opens http://localhost:38401 (the MCP's launcher page); that page
+	// sends OPEN_HUB here via externally_connectable; the handler above creates or reuses the hub —
+	// alone in its own window — and closes the launcher tab. Idle Chrome shows nothing of ours.
 })
 
 async function openOrFocusHubTab(wsPort: number) {

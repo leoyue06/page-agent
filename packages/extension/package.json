@@ -9,9 +9,8 @@
 		"zip": "wxt zip",
 		"test": "vitest run",
 		"postinstall": "wxt prepare",
-		"test:hub-race": "node test/hub-revive-race.mjs .output/chrome-mv3/background.js",
 		"test:hub-cleanup": "node test/hub-window-cleanup.mjs .output/chrome-mv3/background.js",
-		"test:hub-noblank": "node test/hub-no-blank-window.mjs .output/chrome-mv3/background.js"
+		"test:hub-lazy": "node test/hub-lazy.mjs .output/chrome-mv3/background.js"
 	},
 	"devDependencies": {
 		"@radix-ui/react-hover-card": "^1.1.20",

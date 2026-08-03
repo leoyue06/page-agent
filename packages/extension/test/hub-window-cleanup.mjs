@@ -1,8 +1,11 @@
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-// Leo's actual state: eight hub windows. One revive must collapse them to one.
+// Leo's actual state: eight leftover hub windows from the multiplication era. Under the lazy
+// model nothing runs at startup, so the collapse happens on the next OPEN_HUB (i.e. the next
+// cloud task). Asserts: hubs collapse to ONE, and Leo's own tab is untouched.
 const HUB = 'chrome-extension://fake/hub.html'
+const ext = []
 let tabs = [],
 	removedWindows = [],
 	nextId = 1
@@ -13,11 +16,10 @@ const tick = () => new Promise((r) => setTimeout(r, 0))
 globalThis.chrome = {
 	runtime: {
 		onMessage: L,
-		onMessageExternal: L,
+		onMessageExternal: { addListener: (f) => ext.push(f) },
 		onStartup: L,
 		onInstalled: L,
 		getURL: (p) => `chrome-extension://fake/${p}`,
-		// the real Chrome path: getContexts knows our own pages even when tab.url does not
 		getContexts: async () => {
 			await tick()
 			return tabs
@@ -52,11 +54,23 @@ globalThis.chrome = {
 			tabs = tabs.filter((t) => t.windowId !== id)
 		},
 	},
-	alarms: { create: () => {}, onAlarm: L },
 }
 globalThis.self = globalThis
 await import(pathToFileURL(resolve(process.argv[2])).href)
+
+// idle: nothing may have happened yet
+if (tabs.filter((t) => String(t.url).startsWith(HUB)).length !== 8) {
+	console.log('❌ FAIL — something ran at startup under the lazy model')
+	process.exit(1)
+}
+
+// a cloud task arrives → the worker opens the launcher → launcher sends OPEN_HUB
+tabs.push({ id: 98, windowId: 99, url: 'http://localhost:38401/' })
+await new Promise((res) =>
+	ext.forEach((f) => f({ type: 'OPEN_HUB', wsPort: 38401 }, { tab: { id: 98 } }, res))
+)
 await new Promise((r) => setTimeout(r, 300))
+
 const hubs = tabs.filter((t) => String(t.url).startsWith(HUB))
 const mine = tabs.filter((t) => t.id === 99)
 console.log(
