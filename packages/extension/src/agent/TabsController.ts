@@ -24,6 +24,17 @@ function sendMessage(message: {
  * here and the background script falls back to `sender.tab` instead.
  */
 async function getOwnWindowId(): Promise<number | undefined> {
+	// KNOVA: ask for THIS PAGE'S tab, not for "the current window". chrome.windows.getCurrent()
+	// resolves against the focused window, and our hub window is created with focused:false and
+	// may never be focused — so it could hand back the window Leo is reading, and every agent tab
+	// would open there. That is non-deterministic by construction: it depends on what happens to
+	// be frontmost when a task starts, which is exactly the "sometimes right, sometimes in my
+	// working window" behaviour. tabs.getCurrent() returns the tab hosting this very page, so its
+	// windowId is the hub's window with no focus dependence at all.
+	if (typeof chrome.tabs !== 'undefined') {
+		const self = await chrome.tabs.getCurrent().catch(() => undefined)
+		if (self?.windowId != null) return self.windowId
+	}
 	if (typeof chrome.windows === 'undefined') return undefined
 	const win = await chrome.windows.getCurrent()
 	return win.id
