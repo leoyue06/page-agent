@@ -69,13 +69,29 @@ export default defineBackground(() => {
 	// fails with "Extension hub never connected" — the user then has to visit localhost:PORT by
 	// hand, which is the manual step all of this exists to remove. An alarm is the MV3 way to get
 	// a periodic wake-up; it fires roughly every minute and only acts when the hub is missing.
-	chrome.alarms.create('knova-hub-keepalive', { periodInMinutes: 1 })
-	chrome.alarms.onAlarm.addListener((alarm) => {
-		if (alarm.name !== 'knova-hub-keepalive') return
-		void chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` }).then((tabs) => {
-			if (tabs.length === 0) reviveHub()
+	// GUARDED, and the guard is the point. This runs at the TOP LEVEL of an MV3 service worker,
+	// where a throw does not just skip the keepalive — it fails service-worker registration, and
+	// the worker is the spine of the whole chain (every TAB_CONTROL / PAGE_CONTROL message routes
+	// through it). One missing optional API therefore took down the entire extension.
+	//
+	// Measured 2026-08-02 from Chrome's own Secure Preferences: granted_permissions.api DID list
+	// "alarms", but the manifest snapshot Chrome had loaded did NOT — the reload had not picked up
+	// the new manifest from disk. So chrome.alarms was undefined, `.create` threw, registration
+	// failed with status 15 (kErrorScriptEvaluateFailed), and the symptom Leo saw was a dead
+	// extension with a hub that never came back.
+	//
+	// Degrading to "no keepalive" is survivable; taking the spine down is not.
+	if (chrome.alarms?.create) {
+		chrome.alarms.create('knova-hub-keepalive', { periodInMinutes: 1 })
+		chrome.alarms.onAlarm.addListener((alarm) => {
+			if (alarm.name !== 'knova-hub-keepalive') return
+			void chrome.tabs.query({ url: `${chrome.runtime.getURL('hub.html')}*` }).then((tabs) => {
+				if (tabs.length === 0) reviveHub()
+			})
 		})
-	})
+	} else {
+		console.warn('[KNOVA] chrome.alarms unavailable — hub keepalive disabled for this session')
+	}
 })
 
 async function openOrFocusHubTab(wsPort: number) {
