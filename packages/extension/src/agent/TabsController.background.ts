@@ -115,7 +115,8 @@ export function handleTabControlMessage(
 				.catch((error) =>
 					sendResponse({ error: error instanceof Error ? error.message : String(error) })
 				)
-			break
+			return true // async response — WITHOUT this Chrome closes the channel and
+			// sendResponse becomes a no-op, so the caller silently gets undefined
 		}
 
 		case 'open_new_tab': {

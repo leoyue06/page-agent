@@ -80,10 +80,19 @@ export class TabsController {
 				payload: {},
 			})
 			targetWindowId = (agentWin as { windowId?: number }).windowId
-		} catch {
-			/* fall back below */
+		} catch (e) {
+			console.error('[KNOVA] get_agent_window threw', e)
 		}
-		if (targetWindowId == null) targetWindowId = await getOwnWindowId()
+		if (targetWindowId == null) {
+			// Loud on purpose. A silent fallback here cost a whole round: the handler was ending
+			// with `break` instead of `return true`, so sendResponse never delivered, this went
+			// undefined, and the agent quietly worked in the user's own window while the (created,
+			// unused) agent window sat empty as apparent proof it was working.
+			console.warn(
+				'[KNOVA] no agent window — FALLING BACK to the hub window; tabs will open where the user is reading'
+			)
+			targetWindowId = await getOwnWindowId()
+		}
 
 		const activeTabResult = await sendMessage({
 			type: 'TAB_CONTROL',
