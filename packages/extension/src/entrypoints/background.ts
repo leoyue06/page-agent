@@ -73,20 +73,14 @@ async function openOrFocusHubTab(wsPort: number) {
 		// The revive path has to be IDEMPOTENT(幂等) — running it again must be a no-op.
 		const want = `${hubUrl}?ws=${wsPort}`
 
-		// THE INVARIANT that replaces the whole get_agent_window layer: the hub tab sits ALONE in
-		// its own window. Upstream then routes every agent tab to the hub's window (TabsController
-		// runs inside the hub page, so windows.getCurrent() IS that window) with active:false — so
-		// "never touch the window Leo is reading" comes for free, with no second window factory.
-		// The one case that breaks it is Leo opening the hub url by hand in his working window;
-		// moving it out is a single call and makes the invariant self-healing.
-		const roommates = (
-			await chrome.tabs.query({ windowId: existing[0].windowId }).catch(() => [])
-		).filter((t) => t.id !== existing[0].id)
-		if (roommates.length > 0) {
-			knovaLog('hub:evicting', { from: existing[0].windowId, roommates: roommates.length })
-			await chrome.windows.create({ tabId: existing[0].id, focused: false }).catch(() => {})
-		}
-
+		// NO EVICTION. v16 enforced "the hub sits ALONE in its window" and moved the hub out
+		// whenever it had roommates — but task tabs living in the hub's window IS the design
+		// (open_new_tab targets it, PageAgent groups form there). Measured on Leo's machine
+		// (2026-08-03 04:51:15, /tmp/knova-ext.log): the task put example.com in the hub's window,
+		// and the very next summon logged hub:evicting roommates:1 and split the hub away from its
+		// own task tabs — the "third window appearing near the end of the task" Leo reported. The
+		// invariant conflated "the hub's dedicated window" with "the hub alone in a window".
+		// Task tabs are legitimate roommates; the hub stays put.
 		knovaLog('hub:reuse', {
 			tabId: existing[0].id,
 			windowId: existing[0].windowId,

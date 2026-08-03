@@ -96,3 +96,27 @@ if (created.length !== 1 || hubs2.length !== 1 || leoTab.length !== 1) {
 	process.exit(1)
 }
 console.log('✅ second OPEN_HUB → reused, no new window, user tab untouched')
+
+// a task ran and put its tab in the hub's window — that is the DESIGN, not an intrusion.
+// v16's "hub sits alone" invariant evicted the hub here (measured on Leo's machine:
+// hub:evicting roommates:1 splitting the hub from its own task tab). Pin the fix:
+const hubTab = tabs.find((t) => String(t.url).startsWith(HUB))
+tabs.push({ id: 500, windowId: hubTab.windowId, url: 'https://example.com/' })
+await send({ type: 'OPEN_HUB', wsPort: 38401 })
+await new Promise((r) => setTimeout(r, 150))
+const hubAfter = tabs.find((t) => String(t.url).startsWith(HUB))
+const taskTab = tabs.find((t) => t.id === 500)
+if (
+	created.length !== 1 ||
+	hubAfter.windowId !== hubTab.windowId ||
+	!taskTab ||
+	taskTab.windowId !== hubTab.windowId
+) {
+	console.log(
+		`❌ FAIL — third OPEN_HUB with a task tab present: created=${created.length} hubWindow=${hubAfter?.windowId} (was ${hubTab.windowId}) taskTabWindow=${taskTab?.windowId}`
+	)
+	process.exit(1)
+}
+console.log(
+	'✅ third OPEN_HUB with a task tab in the hub window → hub STAYS, tab stays, no eviction'
+)
