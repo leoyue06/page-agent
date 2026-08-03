@@ -224,6 +224,18 @@ export async function inputTextElement(element: HTMLElement, text: string) {
 	// Only dispatch shared input event for non-contenteditable (contenteditable has its own)
 	if (!isContentEditable) {
 		element.dispatchEvent(new Event('input', { bubbles: true }))
+		// KNOVA: and the `change` event, which this branch never fired. The contenteditable
+		// branch above dispatches it explicitly ("for good measure") and blurs "for validation" —
+		// plain inputs got neither half of that treatment, and blurLastClickedElement()'s blur()
+		// does NOT make up for it: browsers only synthesise `change` on blur for values a real
+		// user typed (the dirty-value flag), never for programmatic ones.
+		//
+		// Measured 2026-08-03 on NVIDIA's Workday form: name and phone visibly held the right
+		// values while Workday still refused with "The field is required and must have a value",
+		// because its validation listens for `change`. Same family as the `input.checked` and
+		// attribute-vs-property gaps — upstream fixed the one case that bit it and never
+		// generalised. Greenhouse never surfaced it because that form reads the DOM at submit.
+		element.dispatchEvent(new Event('change', { bubbles: true }))
 	}
 
 	await waitFor(0.1)
