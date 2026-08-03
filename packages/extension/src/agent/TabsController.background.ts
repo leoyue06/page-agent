@@ -88,12 +88,52 @@ async function resolveActiveTab(
  */
 export async function findHubTabs(): Promise<chrome.tabs.Tab[]> {
 	const hubUrl = chrome.runtime.getURL('hub.html')
+
+	// MEASURED, not assumed (/tmp/knova-ext.log, 2026-08-03): filtering chrome.tabs.query({}) by
+	// `url` returned hubs:[] on EVERY call while totalTabs climbed 2→3→4→5→6→7 — it could not even
+	// see the hub it had created 100ms earlier. tabs.query does not populate `url` for these tabs,
+	// so the filter matched nothing, every revive concluded "no hub exists", and each one opened
+	// another window. Leo ended up with eight. Serializing the revives could not help: each call
+	// genuinely found nothing.
+	//
+	// getContexts() is the API actually meant for "where are my own documents". It reports
+	// documentUrl for the extension's own pages and does not depend on tab-url visibility at all.
+	let hubs: chrome.tabs.Tab[] = []
+	let via = 'none'
+	try {
+		const ctxs = await chrome.runtime.getContexts?.({
+			contextTypes: ['TAB' as chrome.runtime.ContextType],
+		})
+		const ids = (ctxs ?? [])
+			.filter((c) => c.documentUrl?.startsWith(hubUrl))
+			.map((c) => c.tabId)
+			.filter((id): id is number => typeof id === 'number' && id >= 0)
+		if (ids.length > 0) {
+			const got = await Promise.all(ids.map((id) => chrome.tabs.get(id).catch(() => null)))
+			hubs = got.filter((t): t is chrome.tabs.Tab => t != null)
+			via = 'getContexts'
+		}
+	} catch {
+		/* older Chrome, or getContexts unavailable — fall through to the url scan below */
+	}
+
 	const all = await chrome.tabs.query({})
-	const hubs = all.filter((t) => t.url?.startsWith(hubUrl))
+	if (hubs.length === 0) {
+		// Fallback, and it now also checks pendingUrl (a tab that has not committed navigation
+		// reports its target there, not in url).
+		hubs = all.filter((t) => t.url?.startsWith(hubUrl) || t.pendingUrl?.startsWith(hubUrl))
+		if (hubs.length > 0) via = 'urlScan'
+	}
+
 	knovaLog('findHubTabs', {
+		via,
 		totalTabs: all.length,
-		hubs: hubs.map((t) => ({ tabId: t.id, windowId: t.windowId, url: t.url })),
 		windows: [...new Set(all.map((t) => t.windowId))].length,
+		hubs: hubs.map((t) => ({ tabId: t.id, windowId: t.windowId, url: t.url })),
+		// raw sample so a future miss is diagnosable in ONE round instead of four
+		sample: all
+			.slice(0, 12)
+			.map((t) => ({ id: t.id, w: t.windowId, url: t.url, pending: t.pendingUrl, title: t.title })),
 	})
 	return hubs
 }
