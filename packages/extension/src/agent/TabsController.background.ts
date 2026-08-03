@@ -12,6 +12,24 @@ const PREFIX = '[TabsController.background]'
 const debug = console.debug.bind(console, `\x1b[90m${PREFIX}\x1b[0m`)
 
 /**
+ * KNOVA telemetry. The service worker's console is not readable from outside Chrome, which is why
+ * the hub/window bugs took four blind rounds to pin down. The local worker listens on 38403 and
+ * appends whatever we POST to /tmp/knova-ext.log, so decisions taken in here become EVIDENCE.
+ * Fire-and-forget: never awaited, never throws, and a missing sink is silently fine.
+ */
+export function knovaLog(event: string, data: Record<string, unknown> = {}): void {
+	try {
+		void fetch('http://127.0.0.1:38403/log', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ event, ...data }),
+		}).catch(() => {})
+	} catch {
+		/* sink down — telemetry must never affect behaviour */
+	}
+}
+
+/**
  * Resolve active tab.
  *
  * - `tabs.query({ active: true })` does not work in multi-window scenarios.
@@ -71,7 +89,13 @@ async function resolveActiveTab(
 export async function findHubTabs(): Promise<chrome.tabs.Tab[]> {
 	const hubUrl = chrome.runtime.getURL('hub.html')
 	const all = await chrome.tabs.query({})
-	return all.filter((t) => t.url?.startsWith(hubUrl))
+	const hubs = all.filter((t) => t.url?.startsWith(hubUrl))
+	knovaLog('findHubTabs', {
+		totalTabs: all.length,
+		hubs: hubs.map((t) => ({ tabId: t.id, windowId: t.windowId, url: t.url })),
+		windows: [...new Set(all.map((t) => t.windowId))].length,
+	})
+	return hubs
 }
 
 export async function getAgentWindowId(): Promise<number> {

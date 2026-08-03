@@ -1,5 +1,5 @@
 import { handlePageControlMessage } from '@/agent/RemotePageController.background'
-import { findHubTabs, handleTabControlMessage } from '@/agent/TabsController.background'
+import { findHubTabs, handleTabControlMessage, knovaLog } from '@/agent/TabsController.background'
 
 export default defineBackground(() => {
 	console.log('[Background] Service Worker started')
@@ -33,6 +33,7 @@ export default defineBackground(() => {
 			// KNOVA: remember the port so the hub can revive itself on the next browser start
 			// without the user having to visit the launcher URL by hand.
 			void chrome.storage.local.set({ knovaHubWsPort: message.wsPort })
+			knovaLog('OPEN_HUB', { wsPort: message.wsPort })
 			openOrFocusHubTab(message.wsPort).then(() => {
 				if (sender.tab?.id) chrome.tabs.remove(sender.tab.id)
 				sendResponse({ ok: true })
@@ -61,7 +62,8 @@ export default defineBackground(() => {
 	//
 	// Chaining the calls makes the second and third see the window the first created and no-op.
 	let reviveChain: Promise<unknown> = Promise.resolve()
-	const reviveHub = () => {
+	const reviveHub = (trigger: string) => {
+		knovaLog('revive:queued', { trigger })
 		reviveChain = reviveChain
 			.then(async () => {
 				const { knovaHubWsPort } = await chrome.storage.local.get('knovaHubWsPort')
@@ -71,13 +73,15 @@ export default defineBackground(() => {
 				// was a silent no-op, indistinguishable from the feature not existing.
 				const port = typeof knovaHubWsPort === 'number' ? knovaHubWsPort : 38401
 				console.log('[KNOVA] reviving hub on port', port)
+				knovaLog('revive:start', { trigger, port })
 				await openOrFocusHubTab(port)
+				knovaLog('revive:done', { trigger })
 			})
 			.catch((e) => console.warn('[KNOVA] revive failed', e))
 	}
-	chrome.runtime.onStartup.addListener(reviveHub)
-	chrome.runtime.onInstalled.addListener(reviveHub)
-	reviveHub() // service worker just woke up (e.g. after a reload) — bring it back now too
+	chrome.runtime.onStartup.addListener(() => reviveHub('onStartup'))
+	chrome.runtime.onInstalled.addListener(() => reviveHub('onInstalled'))
+	reviveHub('sw-start') // service worker just woke up (e.g. after a reload) — bring it back now too
 
 	// The three hooks above are not enough on their own: if the user CLOSES the hub tab, nothing
 	// happens afterwards to wake this service worker, so the hub stays dead and the next task
@@ -101,7 +105,7 @@ export default defineBackground(() => {
 		chrome.alarms.onAlarm.addListener((alarm) => {
 			if (alarm.name !== 'knova-hub-keepalive') return
 			void findHubTabs().then((tabs) => {
-				if (tabs.length === 0) reviveHub()
+				if (tabs.length === 0) reviveHub('alarm')
 			})
 		})
 	} else {
@@ -126,6 +130,12 @@ async function openOrFocusHubTab(wsPort: number) {
 		// running, and a real task that died with "Hub disconnected while task was running".
 		// The revive path has to be IDEMPOTENT(幂等) — running it again must be a no-op.
 		const want = `${hubUrl}?ws=${wsPort}`
+		knovaLog('hub:reuse', {
+			tabId: existing[0].id,
+			windowId: existing[0].windowId,
+			urlMatches: existing[0].url === want,
+			duplicates: existing.length - 1,
+		})
 		if (existing[0].url !== want) await chrome.tabs.update(existing[0].id, { url: want }) // no active:true
 
 		// ONE hub, ONE window. Extra hubs are the leftovers of the stale-windowId bug: a saved
@@ -138,15 +148,25 @@ async function openOrFocusHubTab(wsPort: number) {
 			await chrome.tabs.remove(dup.id).catch(() => {})
 			if (dup.windowId == null) continue
 			const rest = await chrome.tabs.query({ windowId: dup.windowId }).catch(() => [])
-			const ours = (t: chrome.tabs.Tab) => t.url === 'about:blank' || !!t.url?.startsWith(hubUrl)
-			if (rest.length > 0 && rest.every(ours)) {
-				await chrome.windows.remove(dup.windowId).catch(() => {})
-			}
+			const ours = (t: chrome.tabs.Tab) =>
+				t.url === 'about:blank' ||
+				t.url === '' ||
+				!!t.url?.startsWith(hubUrl) ||
+				!!t.url?.startsWith('chrome://newtab')
+			const collapse = rest.length > 0 && rest.every(ours)
+			knovaLog('hub:duplicate', {
+				tabId: dup.id,
+				windowId: dup.windowId,
+				leftoverUrls: rest.map((t) => t.url),
+				closingWindow: collapse,
+			})
+			if (collapse) await chrome.windows.remove(dup.windowId).catch(() => {})
 		}
 		return
 	}
 
 	// No hub anywhere → give it its OWN window immediately. Creating the window WITH the hub url
 	// (rather than about:blank and then a tab) is also what stops the stray about:blank appearing.
-	await chrome.windows.create({ url: `${hubUrl}?ws=${wsPort}`, focused: false })
+	const created = await chrome.windows.create({ url: `${hubUrl}?ws=${wsPort}`, focused: false })
+	knovaLog('hub:created-window', { windowId: created?.id })
 }
