@@ -90,6 +90,13 @@ export class HubWs {
 	#handlers: HubWsHandlers
 	#port: number
 	#onStateChange: (state: HubWsState) => void
+	// KNOVA: auto-reconnect. Upstream connected exactly once per page load, so any MCP restart
+	// (every worker deploy does one) left the hub on "Disconnected" forever — the dead-looking
+	// state Leo kept photographing. The page outliving the server is normal here; retry until it
+	// comes back, backing off to 30s. A deliberate disconnect() must NOT retry.
+	#retryTimer: ReturnType<typeof setTimeout> | null = null
+	#backoff = 2000
+	#deliberate = false
 
 	constructor(port: number, handlers: HubWsHandlers, onStateChange: (state: HubWsState) => void) {
 		this.#port = port
@@ -107,12 +114,18 @@ export class HubWs {
 
 	connect() {
 		if (this.#ws) return
+		this.#deliberate = false
+		if (this.#retryTimer) {
+			clearTimeout(this.#retryTimer)
+			this.#retryTimer = null
+		}
 		this.#setState('connecting')
 
 		const ws = new WebSocket(`ws://localhost:${this.#port}`)
 		this.#ws = ws
 
 		ws.addEventListener('open', () => {
+			this.#backoff = 2000
 			this.#setState('connected')
 			this.#send({ type: 'ready' })
 		})
@@ -122,6 +135,13 @@ export class HubWs {
 			this.#busy = false
 			this.#approved = false
 			this.#setState('disconnected')
+			if (!this.#deliberate && !this.#retryTimer) {
+				this.#retryTimer = setTimeout(() => {
+					this.#retryTimer = null
+					this.connect()
+				}, this.#backoff)
+				this.#backoff = Math.min(this.#backoff * 2, 30_000)
+			}
 		})
 
 		ws.addEventListener('message', (event) => {
@@ -130,6 +150,11 @@ export class HubWs {
 	}
 
 	disconnect() {
+		this.#deliberate = true
+		if (this.#retryTimer) {
+			clearTimeout(this.#retryTimer)
+			this.#retryTimer = null
+		}
 		this.#ws?.close()
 		this.#ws = null
 		this.#busy = false
